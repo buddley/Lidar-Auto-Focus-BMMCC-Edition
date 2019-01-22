@@ -12,7 +12,6 @@
 #include <Servo.h>
 #include <ky-040.h>
 #include <Adafruit_SSD1306.h>
-#include <splash.h>
 #include <Adafruit_GFX.h>
 #include <spline.h>
 
