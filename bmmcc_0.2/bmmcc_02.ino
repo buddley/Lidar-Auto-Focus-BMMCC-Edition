@@ -53,28 +53,32 @@ int raw_dist, strength, checksum;
 int uart[9];
 const int leading = 0x59;
 int dist = 200;
+int offset = 8;
+int range = 200; //cm +/-range to follow focus 
+int sens = 5; // 1-10 false_count > sens *50 ~ 0.5sec 
+int false_count = 0;
+bool af = false;
+
+bool ftin = true;
 
 /* lens - hardcoded */
 #define lens_count 2
-
-int lens[lens_count][3] = {
-    {24, 85, 35},
-    {50, 50, 14}
+String lens[lens_count][2] = {
+    {"24-85mm", "f/3.5"},
+    {"50mm", "f/1.4"}
     };
 /* lens scale and servo position
 * actual measurement needs 9 positions
 * first and last values are not used - only for spline calculation*/
 int scale[lens_count][11] = {
-    {29,30,50,70,100,150,200,500,1000,2500,2501},
-    {29,30,50,70,100,150,200,500,1000,2500,2501}
-    }; //the second last one = inf
+    {29,30,50,70,100,150,200,500,1200,2500,2501},
+    {29,30,50,70,100,150,200,500,1200,2500,2501}
+    }; //the second last one = inf, third last one = 1200cm = longest distance lidar can measure
 int pos[lens_count][11] = {
     {999,1000,1125,1250,1375,1500,1625,1750,1875,2000,2001},
     {999,1000,1125,1250,1375,1500,1625,1750,1875,2000,2001}
     };
 
-int sens = 5; // 1-10
-bool af = false;
 
 Spline af_curve;
 Servo servo;
@@ -92,14 +96,35 @@ int curr_fps = 0;
 int curr_codec = 0;
 int curr_lens = 0;
 
-#define menu_count 8
-String menu[] = {"ISO", "ANGLE", "WB", "FPS", "CODEC", "LENS", "SENS", "TUNE"};
+#define menu_count 10
+String menu[] = {"ISO", "ANGLE", "WB", "FPS", "CODEC", "LENS", "SENS", "TUNE", "OFFSET", "RANGE"};
 #define fps_count 8
 String fps[] = {"23.98", "24.00", "25.00", "29.97", "30.00", "50.00", "59.94", "60.00"};
 #define codec_count 8
 String codec[] = {"RAW", "R3:1", "422HQ", "422", "422LT", "PROXY"};
 
 /* FUNCTIONS */
+// eeprom related
+void read_rom(){
+    int addr = 0;
+    EEPROM.get(addr, offset);
+    addr += sizeof(offset);
+    EEPROM.get(addr, range);
+    addr += sizeof(range);
+    EEPROM.get(addr, sens);
+    addr += sizeof(sens);
+    EEPROM.get(addr, sbus_value[5]);
+}
+void write_rom(){
+    int addr = 0;
+    EEPROM.put(addr, offset);
+    addr += sizeof(offset);
+    EEPROM.put(addr, range);
+    addr += sizeof(range);
+    EEPROM.put(addr, sens);
+    addr += sizeof(sens);
+    EEPROM.put(addr, sbus_value[5]);
+}
 
 // control related
 void step(int dir, int channel){ // mid - high or low - mid
@@ -129,11 +154,24 @@ void set_value(){
     switch (curr_menu){
         case 3:
             sbus.Servo((curr_menu + 1), int(sbus_low + (sbus_high - sbus_low) / fps_count * curr_fps));
+            break;
         case 4:
             sbus.Servo((curr_menu + 1), int(sbus_low + (sbus_high - sbus_low) / codec_count * curr_codec));
+            break;
+        case 5:
+            float x[11], y[11];
+            for (int i = 0; i < 11; i++){
+                x[i] = scale[curr_lens][i];
+                y[i] = pos[curr_lens][i];
+            }
+            af_curve.setPoints(x, y, 11);
+            af_curve.setDegree( Catmull );
+            break;
     }
     sbus.Update();
     sbus.Send();
+
+    write_rom();
 }
 
 // display related
@@ -147,7 +185,7 @@ void welcome(){
     display.setTextColor(WHITE);
     display.setCursor(0,0);
     display.println(F("BMMCC CTRL"));
-    display.println(F("AF BUDDY"));
+    display.println(F("LIDAR AF"));
     display.println(F("V0.2"));
 
     display.display();
@@ -157,13 +195,19 @@ void lock_screen(){
     if (lidar_conn){
         if (af) {
             line[0] = "AF-ON";
-        } else {
+        } else if(!af) {
             line[0] = "DIST";
         }
-        line[1] = dist;
+        if (!ftin) {
+            line[1] = dist;
+        } else if (ftin) {
+            unsigned int ft = dist * 100 / 3048;
+            unsigned int in = dist * 100 / 254 - ft * 12;
+            line[1] = ft + "-" + in;
+        }
         update_disp();
     } else if (!lidar_conn && (millis() - volt_check) > 5000){ //refresh rate > 5sec
-        voltage = analogRead(p_batt)*10/1023;
+        voltage = analogRead(p_batt) * 10 / 1023;
         line[0] = "LOCKED";
         line[1] = String(voltage, 2);
         volt_check = millis(); //reset timer
@@ -195,11 +239,15 @@ void show_menu(){
             line[1] = fps[curr_codec];
         } else if (curr_menu == 5){
             disp_lines = 3;
-            line[1] = lens[curr_lens][0] + "-" + lens[curr_lens][1];
-            line[2] = "f/" + lens[curr_lens][2];
+            line[1] = lens[curr_lens][0];
+            line[2] = lens[curr_lens][1];
         } else if (curr_menu == 6){
-            line[1] = sens;
-        } 
+            line[1] = sens + "/10";
+        } else if (curr_menu == 8){
+            line[1] = offset + "cm";
+        } else if (curr_menu == 9){
+            line[1] = range + "cm";
+        }
     }
     update_disp();    
 }
@@ -265,6 +313,12 @@ void button_handler(){
             edit = true;
         }
         show_menu();
+    } else if (lock){
+        if (ftin){
+            ftin = false;
+        } else if (!ftin){
+            ftin = true;
+        }
     }
 }
 
@@ -294,6 +348,10 @@ void enc_interrupt(void){
                     curr_lens = constrain((curr_lens + movement), 0, (lens_count - 1));
                 } else if (curr_menu == 6){
                     sens = constrain((sens + movement), 1, 10);
+                } else if (curr_menu == 8){
+                    offset = constrain((offset + movement), -50, 50);
+                } else if (curr_menu == 9){
+                    range = constrain((range + movement), 0, 1200);
                 }
             }
         }
@@ -312,10 +370,15 @@ void read_lidar(){
             }
             checksum = uart[0]+uart[1]+uart[2]+uart[3]+uart[4]+uart[5]+uart[6]+uart[7];
             if (uart[8] == (checksum & 0xff)){
-                raw_dist = uart[3]*256 + uart[2];
+                raw_dist = uart[3]*256 + uart[2] + offset;
                 strength = uart[5]*256 + uart[4];
                 if (20 < strength) {
-                    dist = int( dist - (sens/10 * (dist - raw_dist)) ); //unit: cm
+                    if (abs(dist - raw_dist) < range || false_count > (sens * 50)){
+                        dist = dist - (dist - raw_dist) / 2; //unit: cm
+                        false_count = 0;
+                    } else {
+                        false_count++;
+                    }
                 }
             }
         }
@@ -326,18 +389,7 @@ void servo_drive(){
     if (!digitalRead(p_afon)){
         af = true;
 
-        float x[11], y[11];
-        float z = dist;
-        
-        for (int i = 0; i < 11; i++){
-          x[i] = scale[curr_lens][i];
-          y[i] = pos[curr_lens][i];
-        }
-        
-        af_curve.setPoints(x, y, 11);
-        af_curve.setDegree( Catmull );
-
-        focus = int(af_curve.value(z));
+        focus = int(af_curve.value(float(dist)));
 
     } else {
         af = false;
@@ -363,6 +415,8 @@ void setup(){
     }
 
     welcome();
+
+    read_rom();
 
     pinMode(p_run, INPUT_PULLUP);
     pinMode(p_push, INPUT_PULLUP);
