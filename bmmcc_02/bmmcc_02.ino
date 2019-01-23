@@ -49,20 +49,24 @@ ky040 encoder(p_enca, p_encb, p_push);
 
 /* lidar */
 bool lidar_conn = false;
-int raw_dist, strength, checksum;
+int raw_dist, raw_prev, strength, checksum;
 int uart[9];
 const int leading = 0x59;
 int dist = 200;
+int dist_prev[5];
 int offset = 8;
 int range = 200; //cm +/-range to follow focus 
 int sens = 5; // 1-10 false_count > sens *50 ~ 0.5sec 
 int false_count = 0;
-bool af = false;
+int tail_count = 0;
+#define tail_end 3
 
+bool af = false;
 bool ftin = true;
 
 /* lens - hardcoded */
 #define lens_count 2
+#define scale_count 14
 String lens[lens_count][2] = {
     {"24-85mm", "f/3.5"},
     {"50mm", "f/1.4"}
@@ -70,13 +74,13 @@ String lens[lens_count][2] = {
 /* lens scale and servo position
 * actual measurement needs 9 positions
 * first and last values are not used - only for spline calculation*/
-int scale[lens_count][11] = {
-    {29,30,50,70,100,150,200,500,1200,2500,2501},
-    {29,30,50,70,100,150,200,500,1200,2500,2501}
+int scale[lens_count][14] = {
+    {44,45,50,60,70,80,100,120,150,200,300,500,5357,5358},
+    {44,45,50,60,70,80,100,120,150,200,300,500,5357,5358}
     }; //the second last one = inf, third last one = 1200cm = longest distance lidar can measure
-int pos[lens_count][11] = {
-    {999,1000,1125,1250,1375,1500,1625,1750,1875,2000,2001},
-    {999,1000,1125,1250,1375,1500,1625,1750,1875,2000,2001}
+int pos[lens_count][14] = {
+    {999,1000,1075,1275,1395,1445,1505,1555,1605,1655,1705,1755,1830,1831},
+    {999,1000,1075,1275,1395,1445,1505,1555,1605,1655,1705,1755,1830,1831}
     };
 
 
@@ -126,6 +130,18 @@ void write_rom(){
     EEPROM.put(addr, sbus_value[5]);
 }
 
+//spline
+void make_spline(){
+    float x[scale_count], y[scale_count];
+    for (int i = 0; i < scale_count; i++){
+        x[i] = scale[curr_lens][i];
+        y[i] = pos[curr_lens][i];
+    }
+    af_curve.setPoints(x, y, scale_count);
+    af_curve.setDegree( Catmull );
+}
+            
+
 // control related
 void step(int dir, int channel){ // mid - high or low - mid
     channel++; //0-base to 1-base
@@ -159,13 +175,7 @@ void set_value(){
             sbus.Servo((curr_menu + 1), int(sbus_low + (sbus_high - sbus_low) / codec_count * curr_codec));
             break;
         case 5:
-            float x[11], y[11];
-            for (int i = 0; i < 11; i++){
-                x[i] = scale[curr_lens][i];
-                y[i] = pos[curr_lens][i];
-            }
-            af_curve.setPoints(x, y, 11);
-            af_curve.setDegree( Catmull );
+            make_spline();
             break;
     }
     sbus.Update();
@@ -373,11 +383,24 @@ void read_lidar(){
                 raw_dist = uart[3]*256 + uart[2] + offset;
                 strength = uart[5]*256 + uart[4];
                 if (20 < strength) {
-                    if (abs(dist - raw_dist) < range || false_count > (sens * 50)){
-                        dist = dist - (dist - raw_dist) / 2; //unit: cm
-                        false_count = 0;
+                    if (abs(raw_prev - raw_dist) < range || false_count > (sens * 50)){
+                        if (false_count > 0){
+                            tail_count++;
+                        }
+                        if (false_count == 0 || tail_count > tail_end){
+                            dist = dist - (dist - raw_dist) / 2; //unit: cm
+                            raw_prev = raw_dist;
+                            dist_prev[4] = dist_prev[3];
+                            dist_prev[3] = dist_prev[2];
+                            dist_prev[2] = dist_prev[1];
+                            dist_prev[1] = dist_prev[0];
+                            dist_prev[0] = dist;
+                            false_count = 0;
+                            tail_count = 0;
+                        }
                     } else {
                         false_count++;
+                        dist = dist_prev[4];
                     }
                 }
             }
@@ -388,8 +411,7 @@ void servo_drive(){
     int focus;
     if (!digitalRead(p_afon)){
         af = true;
-
-        focus = int(af_curve.value(float(dist)));
+        focus = af_curve.value(float(dist));
 
     } else {
         af = false;
@@ -439,6 +461,8 @@ void setup(){
         sbus.Servo(i,sbus_value[i]);
     }
     sbus.Update();
+
+    make_spline();
 }
 
 void loop(void){

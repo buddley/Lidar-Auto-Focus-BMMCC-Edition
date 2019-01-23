@@ -13,14 +13,18 @@ Servo servo;
 /* For Arduinoboards with multiple serial ports like DUEboard, interpret above two pieces of code and 
 directly use Serial1 serial port*/ 
 int dist;
-int raw_dist;//actual distance measurements of LiDAR 
+int raw_dist;//actual distance measurements of LiDAR
+int raw_dist_prev;
+int one_prev, two_prev, three_prev;
+int pause_count = 0;
+
 int strength;//signal strength of LiDAR 
 int check;//save check value 
 int i; 
 int uart[9];//save data measured by LiDAR 
 const int HEADER=0x59;//frame header of data package
 int offset = -8;
-int sens = 300;
+int sens = 150;
 int false_count = 0;
 
 int pos = 1500;
@@ -52,11 +56,22 @@ void loop()
                     raw_dist=uart[2]+uart[3]*256+offset;//calculate distance value 
                     strength=uart[4]+uart[5]*256;//calculate signal strength value
                     if (20 < strength) {
-                        if (abs(dist - raw_dist) < 200 || false_count > sens){
-                            dist = dist - ((dist - raw_dist) / 3); //smoothing
-                            false_count = 0;
+                        if (abs(raw_dist_prev - raw_dist) < 100 || false_count > sens){
+                            if (false_count > 0){
+                                pause_count++;
+                            }
+                            if (pause_count > 3 || false_count == 0){
+                                dist = dist - ((dist - raw_dist) / 2); //smoothing
+                                false_count = 0;
+                                pause_count = 0;
+                                raw_dist_prev = raw_dist;
+                                three_prev = two_prev;
+                                two_prev = one_prev;
+                                one_prev = dist;
+                            }
                         } else {
                             false_count++;
+                            dist = three_prev;
                         }
                     }
                     Serial.print("dist = "); 
@@ -64,6 +79,15 @@ void loop()
                     Serial.print('\t');
                     
                     Serial.print(false_count);
+                    Serial.print('\t');
+
+                    Serial.print(three_prev);
+                    Serial.print('\t');
+                    Serial.print(two_prev);
+                    Serial.print('\t');
+                    Serial.print(one_prev);
+                    Serial.print('\t');
+                    Serial.print(pause_count);
                     Serial.print('\t');
 
                     Serial.print("raw_dist = "); 
