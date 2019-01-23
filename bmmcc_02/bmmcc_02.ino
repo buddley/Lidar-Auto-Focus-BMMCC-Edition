@@ -9,7 +9,7 @@
 #include <BMC_SBUS.h>
 #include <EEPROM.h>
 #include <Wire.h>
-#include <Servo.h>
+#include <PWMServo.h>
 #include <ky-040.h>
 #include <Adafruit_SSD1306.h>
 #include <Adafruit_GFX.h>
@@ -21,11 +21,13 @@
 #define p_encb 4
 #define p_push 5
 #define p_batt A0
-#define p_afon A1
+#define p_remote A1
 #define p_focus A2
 #define p_servo A3
 #define p_sda A4
 #define p_scl A5
+
+#define a_res 4095
 
 /* Sbus def */
 #define sbus_mid 1023
@@ -85,12 +87,16 @@ int pos[lens_count][14] = {
 
 
 Spline af_curve;
-Servo servo;
+PWMServo servo;
 
 /* cam control */
 float voltage = 0;
 unsigned long volt_check = millis();//voltage check interval
 int sbus_value[18] = {sbus_mid, sbus_mid, sbus_mid, 0,0,0,sbus_mid,0,0,0,0,0,0,0,0,0,0,0}; //0-2047 (11bit)
+int aud = 70;
+unsigned long lockup;
+#define rec_lock 1;
+
 
 /* menu */
 bool lock = true;
@@ -111,23 +117,28 @@ String codec[] = {"RAW", "R3:1", "422HQ", "422", "422LT", "PROXY"};
 // eeprom related
 void read_rom(){
     int addr = 0;
-    EEPROM.get(addr, offset);
-    addr += sizeof(offset);
-    EEPROM.get(addr, range);
-    addr += sizeof(range);
-    EEPROM.get(addr, sens);
-    addr += sizeof(sens);
-    EEPROM.get(addr, sbus_value[5]);
+    if (EEPROM.read(addr) != 255){
+        addr++;
+        EEPROM.get(addr, offset);
+        addr += sizeof(offset);
+        EEPROM.get(addr, range);
+        addr += sizeof(range);
+        EEPROM.get(addr, sens);
+        addr += sizeof(sens);
+        EEPROM.get(addr, aud);
+    }
 }
 void write_rom(){
     int addr = 0;
+    EEPROM.write(addr, 127);
+    addr++;
     EEPROM.put(addr, offset);
     addr += sizeof(offset);
     EEPROM.put(addr, range);
     addr += sizeof(range);
     EEPROM.put(addr, sens);
     addr += sizeof(sens);
-    EEPROM.put(addr, sbus_value[5]);
+    EEPROM.put(addr, aud);
 }
 
 //spline
@@ -143,7 +154,7 @@ void make_spline(){
             
 
 // control related
-void step(int dir, int channel){ // mid - high or low - mid
+void step(int dir, int channel){
     channel++; //0-base to 1-base
 
     sbus.Servo(channel,sbus_mid);
@@ -204,9 +215,9 @@ void lock_screen(){
     disp_lines = 2;
     if (lidar_conn){
         if (af) {
-            line[0] = "AF-ON";
+            line[0] = "AF-ON  A" + aud;
         } else if(!af) {
-            line[0] = "DIST";
+            line[0] = "DIST   A" + aud;
         }
         if (!ftin) {
             line[1] = dist;
@@ -217,8 +228,8 @@ void lock_screen(){
         }
         update_disp();
     } else if (!lidar_conn && (millis() - volt_check) > 5000){ //refresh rate > 5sec
-        voltage = analogRead(p_batt) * 10 / 1023;
-        line[0] = "LOCKED";
+        voltage = float(analogRead(p_batt)) * 9.9 / float(a_res); //9.9v -> v_div -> 3.3v
+        line[0] = "LOCK   A" + aud;
         line[1] = String(voltage, 2);
         volt_check = millis(); //reset timer
         update_disp();
@@ -291,7 +302,10 @@ int padding(int ln, int font_size){
 }
 // button related
 void record(){
-    step(1, 6);
+    if ((millis() - lockup) > 1000){
+        step(1, 6);
+        lockup = millis();
+    } 
 }
 void check_button(){
     if (encoder.SwitchPressed()){ // depressed
@@ -339,7 +353,8 @@ void enc_interrupt(void){
 
         if (lock){ 
             //when locked change audio
-            sbus_value[5] = sbus_value[5] + movement * 20;
+            aud = constrain((aud + movement), 0, 100);
+            sbus_value[5] = map(aud, 0, 100, 0, 2047);
             sbus.Servo(6, sbus_value[5]);
             sbus.Update();
             sbus.Send();
@@ -409,13 +424,15 @@ void read_lidar(){
 }
 void servo_drive(){
     int focus;
-    if (!digitalRead(p_afon)){
+    int remote = analogRead(p_remote);
+    if (3071 < remote){
+        record();
+    } else if (1023 < remote && remote < 2047){
         af = true;
         focus = af_curve.value(float(dist));
-
-    } else {
+    } else if (remote < 1023){
         af = false;
-        focus = map(analogRead(p_focus), 0, 1023, pos[curr_lens][1], pos[curr_lens][9]);
+        focus = map(analogRead(p_focus), 0, a_res, pos[curr_lens][1], pos[curr_lens][9]);
     }
     servo.writeMicroseconds(focus);
 }
@@ -440,15 +457,16 @@ void setup(){
 
     read_rom();
 
+    analogReadRes(12);
     pinMode(p_run, INPUT_PULLUP);
     pinMode(p_push, INPUT_PULLUP);
     pinMode(p_enca, INPUT_PULLUP);
     pinMode(p_encb, INPUT_PULLUP);
-    pinMode(p_afon, INPUT_PULLUP);
-
+    /*
     pinMode(p_batt, INPUT);
+    pinMode(p_remote, INPUT);
     pinMode(p_focus, INPUT);
-    
+    */
     attachInterrupt(digitalPinToInterrupt(p_run), record, FALLING); //active low
     attachInterrupt(digitalPinToInterrupt(p_enca), enc_interrupt, CHANGE);
     attachInterrupt(digitalPinToInterrupt(p_encb), enc_interrupt, CHANGE);
