@@ -9,7 +9,8 @@
 #include <BMC_SBUS.h>
 #include <EEPROM.h>
 #include <Wire.h>
-#include <PWMServo.h>
+//#include <PWMServo.h> //use PWMServo when reg servo is unreliable
+#include <Servo.h>
 #include <ky-040.h>
 #include <Adafruit_SSD1306.h>
 #include <Adafruit_GFX.h>
@@ -87,15 +88,17 @@ int pos[lens_count][14] = {
 
 
 Spline af_curve;
-PWMServo servo;
+//PWMServo servo;
+Servo servo;
 
 /* cam control */
 float voltage = 0;
-unsigned long volt_check = millis();//voltage check interval
+elapsedMillis volt_check;
+#define volt_refresh 5000
 int sbus_value[18] = {sbus_mid, sbus_mid, sbus_mid, 0,0,0,sbus_mid,0,0,0,0,0,0,0,0,0,0,0}; //0-2047 (11bit)
 int aud = 70;
-unsigned long lockup;
-#define rec_lock 1;
+elapsedMillis lockup;
+#define rec_lock 1000
 
 
 /* menu */
@@ -227,7 +230,7 @@ void lock_screen(){
             line[1] = ft + "-" + in;
         }
         update_disp();
-    } else if (!lidar_conn && (millis() - volt_check) > 5000){ //refresh rate > 5sec
+    } else if (!lidar_conn && volt_check > volt_refresh){
         voltage = float(analogRead(p_batt)) * 9.9 / float(a_res); //9.9v -> v_div -> 3.3v
         line[0] = "LOCK   A" + aud;
         line[1] = String(voltage, 2);
@@ -302,9 +305,9 @@ int padding(int ln, int font_size){
 }
 // button related
 void record(){
-    if ((millis() - lockup) > 1000){
+    if (lockup > rec_lock){
         step(1, 6);
-        lockup = millis();
+        lockup = 0;
     } 
 }
 void check_button(){
@@ -330,10 +333,10 @@ void flip_lock(){
 }
 void button_handler(){
     if (!lock){
-        if (edit){            //edit mode
+        if (edit){ //edit mode
             edit = false;
             set_value();
-        } else if (!edit){            //menu browsing
+        } else if (!edit){ //menu browsing
             edit = true;
         }
         show_menu();
@@ -403,7 +406,7 @@ void read_lidar(){
                             tail_count++;
                         }
                         if (false_count == 0 || tail_count > tail_end){
-                            dist = dist - (dist - raw_dist) / 2; //unit: cm
+                            dist = dist - (dist - raw_dist) / 2; //unit: cm smoothing by 0.5
                             raw_prev = raw_dist;
                             dist_prev[4] = dist_prev[3];
                             dist_prev[3] = dist_prev[2];
@@ -423,7 +426,7 @@ void read_lidar(){
     }
 }
 void servo_drive(){
-    int focus;
+    int focus = 1500;
     int remote = analogRead(p_remote);
     if (3071 < remote){
         record();
