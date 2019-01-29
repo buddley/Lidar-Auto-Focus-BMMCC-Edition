@@ -16,7 +16,6 @@ int value;
 void setup(){
     Serial.begin(115200);
     u8x8.begin();
-    u8x8.setFont(u8x8_font_shylock_nbp_1x2_r);
 }
 
 void padding(int ln, bool big = false){
@@ -34,6 +33,8 @@ void padding(int ln, bool big = false){
 }
 void refresh(){
     //u8x8.clear();
+    //u8x8.setFont(u8x8_font_shylock_nbp_1x2_r);
+    u8x8.setFont(u8x8_font_7x14_1x2_r);
 
     padding(0);
     u8x8.setCursor(0,0);
@@ -54,10 +55,11 @@ void refresh(){
         u8x8.println(line[3]);
     } else {
         char big_font[9];
+        u8x8.setFont(u8x8_font_inr21_2x4_r);
         
         padding(2, true);
         line[2].toCharArray(big_font, 9);
-        u8x8.draw2x2String(0,4,big_font);
+        u8x8.drawString(0,4,big_font);
     }
 }
 
@@ -71,11 +73,11 @@ void loop(){
     }
 
     float sec = (float)millis() / 1000.0;
-    //float volt = (float)value / 1023 * 5;
     value = value - (value - analogRead(A0)) /2;
     float conv_in = (float)value /2.54;
     float ft = conv_in /12.0;
     float in = conv_in - (int)ft * 12;
+    float volt = (float)value / 1023 * 5;
 
     line[0] = "Mode " + String(mode) + " " + String(sec, 2);
 

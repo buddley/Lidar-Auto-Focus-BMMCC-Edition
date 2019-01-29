@@ -12,43 +12,43 @@
 //#include <PWMServo.h> //use PWMServo when reg servo is unreliable
 #include <Servo.h>
 #include <ky-040.h>
-#include <Adafruit_SSD1306.h>
-#include <Adafruit_GFX.h>
+#include <Arduino.h>
+#include <U8x8lib.h>
+#include <SPI.h>
 #include <spline.h>
 
 /* pin */
-#define p_run 2
-#define p_enca 3
-#define p_encb 4
-#define p_push 5
-#define p_batt A0
-#define p_remote A1
-#define p_focus A2
-#define p_servo A3
-#define p_sda A4
-#define p_scl A5
+#define RUN 2
+#define ENCCLK 3
+#define ENCDT 4
+#define ENCPUSH 5
+/* RX3 7  TX3 8  RX2 9  TX2 10
+MOSI 11  SCK 13 */
+#define BATT A0
+#define REMOTE A1
+#define FOCUS A2
+#define SERVO A3
+#define RST A8
+#define DC A9
+#define CS A10 // not in use
 
-#define a_res 4095
+#define ADCRES 4095
 
 /* Sbus def */
-#define sbus_mid 1023
-#define sbus_low 352
-#define sbus_high 1696
+#define SBUS_MID 1023
+#define SBUS_LOW 352
+#define SBUS_HIGH 1696
 
 BMC_SBUS sbus;
 
 /* oled */
-String line[3];
-int disp_lines = 3;
+String line[4];
+int disp_lines = 4;
 
-#define SCREEN_WIDTH 128
-#define SCREEN_HEIGHT 64
-#define OLED_RESET 13
-
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+U8X8_SSD1306_128X64_NONAME_4W_HW_SPI u8x8(CS, DC, RST);
 
 /* encoder */
-ky040 encoder(p_enca, p_encb, p_push);
+ky040 encoder(ENCCLK, ENCDT, ENCPUSH);
 
 /* lidar */
 bool lidar_conn = false;
@@ -56,32 +56,32 @@ int raw_dist, raw_prev, strength, checksum;
 int uart[9];
 const int leading = 0x59;
 int dist = 200;
-int dist_prev[5];
+int dist_buffer[5];
 int offset = 8;
 int range = 200; //cm +/-range to follow focus 
 int sens = 5; // 1-10 false_count > sens *50 ~ 0.5sec 
 int false_count = 0;
 int tail_count = 0;
-#define tail_end 3
+#define TAIL 3
 
 bool af = false;
 bool ftin = true;
 
 /* lens - hardcoded */
-#define lens_count 2
-#define scale_count 14
-String lens[lens_count][2] = {
+#define LENS 2
+#define SCALE 14
+String lens[LENS][2] = {
     {"24-85mm", "f/3.5"},
     {"50mm", "f/1.4"}
     };
 /* lens scale and servo position
-* actual measurement needs 9 positions
+* actual measurement needs 12 positions
 * first and last values are not used - only for spline calculation*/
-int scale[lens_count][14] = {
+int scale[LENS][14] = {
     {44,45,50,60,70,80,100,120,150,200,300,500,5357,5358},
     {44,45,50,60,70,80,100,120,150,200,300,500,5357,5358}
-    }; //the second last one = inf, third last one = 1200cm = longest distance lidar can measure
-int pos[lens_count][14] = {
+    }; //the second last one = inf, one of values = 1200cm = longest distance lidar can measure
+int pos[LENS][14] = {
     {999,1000,1075,1275,1395,1445,1505,1555,1605,1655,1705,1755,1830,1831},
     {999,1000,1075,1275,1395,1445,1505,1555,1605,1655,1705,1755,1830,1831}
     };
@@ -94,11 +94,11 @@ Servo servo;
 /* cam control */
 float voltage = 0;
 elapsedMillis volt_check;
-#define volt_refresh 5000
-int sbus_value[18] = {sbus_mid, sbus_mid, sbus_mid, 0,0,0,sbus_mid,0,0,0,0,0,0,0,0,0,0,0}; //0-2047 (11bit)
+#define V_REFESH 5000
+int sbus_value[18] = {SBUS_MID, SBUS_MID, SBUS_MID, 0,0,0,SBUS_MID,0,0,0,0,0,0,0,0,0,0,0}; //0-2047 (11bit)
 int aud = 70;
 elapsedMillis lockup;
-#define rec_lock 1000
+#define REC_HOLD 1000
 
 
 /* menu */
@@ -109,12 +109,12 @@ int curr_fps = 0;
 int curr_codec = 0;
 int curr_lens = 0;
 
-#define menu_count 10
-String menu[] = {"ISO", "ANGLE", "WB", "FPS", "CODEC", "LENS", "SENS", "TUNE", "OFFSET", "RANGE"};
-#define fps_count 8
-String fps[] = {"23.98", "24.00", "25.00", "29.97", "30.00", "50.00", "59.94", "60.00"};
-#define codec_count 8
-String codec[] = {"RAW", "R3:1", "422HQ", "422", "422LT", "PROXY"};
+#define MENU 10
+String menu[] = {"ASA", "Shutter Angle", "White Balance", "Framerate", "Codec", "Lenses", "Sensitivity", "Focus Motor", "LIDAR Offset", "LIDAR Range"};
+#define FPS 8
+String fps[] = {"23.98p", "24.00p", "25.00p", "29.97p", "30.00p", "50.00p", "59.94p", "60.00p"};
+#define CODEC 8
+String codec[] = {"RAW", "RAW 3:1", "P422 HQ", "P422", "P422 LT", "P PROXY"};
 
 /* FUNCTIONS */
 // eeprom related
@@ -145,13 +145,13 @@ void write_rom(){
 }
 
 //spline
-void make_spline(){
-    float x[scale_count], y[scale_count];
-    for (int i = 0; i < scale_count; i++){
+void map_spline(){
+    float x[SCALE], y[SCALE];
+    for (int i = 0; i < SCALE; i++){
         x[i] = scale[curr_lens][i];
         y[i] = pos[curr_lens][i];
     }
-    af_curve.setPoints(x, y, scale_count);
+    af_curve.setPoints(x, y, SCALE);
     af_curve.setDegree( Catmull );
 }
             
@@ -159,37 +159,34 @@ void make_spline(){
 // control related
 void step(int dir, int channel){
     channel++; //0-base to 1-base
-
-    sbus.Servo(channel,sbus_mid);
+    sbus.Servo(channel,SBUS_MID);
     sbus.Update();
     sbus.Send();
     delay(5);
-
     if (dir > 0){
-        sbus.Servo(channel,sbus_high);
+        sbus.Servo(channel,SBUS_HIGH);
         sbus.Update();
         sbus.Send();
     } else if (dir < 0){
-        sbus.Servo(channel,sbus_low);
+        sbus.Servo(channel,SBUS_LOW);
         sbus.Update();
         sbus.Send();
     }
     delay(5);
-
-    sbus.Servo(channel,sbus_mid);
+    sbus.Servo(channel,SBUS_MID);
     sbus.Update();
     sbus.Send();
 }
 void set_value(){
     switch (curr_menu){
         case 3:
-            sbus.Servo((curr_menu + 1), int(sbus_low + (sbus_high - sbus_low) / fps_count * curr_fps));
+            sbus.Servo((curr_menu + 1), int(SBUS_LOW + (SBUS_HIGH - SBUS_LOW) / FPS * curr_fps));
             break;
         case 4:
-            sbus.Servo((curr_menu + 1), int(sbus_low + (sbus_high - sbus_low) / codec_count * curr_codec));
+            sbus.Servo((curr_menu + 1), int(SBUS_LOW + (SBUS_HIGH - SBUS_LOW) / CODEC * curr_codec));
             break;
         case 5:
-            make_spline();
+            map_spline();
             break;
     }
     sbus.Update();
@@ -200,121 +197,139 @@ void set_value(){
 
 // display related
 void welcome(){
-    //init + some welcome texts
-    display.display();
-    display.clearDisplay();
-
-    //display.setFont(&FreeSans18pt7b);
-    display.setTextSize(2); //scale
-    display.setTextColor(WHITE);
-    display.setCursor(0,0);
-    display.println(F("BMMCC CTRL"));
-    display.println(F("LIDAR AF"));
-    display.println(F("V0.2"));
-
-    display.display();
+    u8x8.clear();
+    u8x8.setCursor(0,0);
+    u8x8.println(" BMMCC CONTROL");
+    u8x8.setCursor(0,2);
+    u8x8.println("LIDAR AUTOFOCUS");
+    u8x8.setCursor(0,4);
+    u8x8.println("   d-project");
+    u8x8.setCursor(0,6);
+    u8x8.println("     190215");
 }
-void lock_screen(){
-    disp_lines = 2;
-    if (lidar_conn){
-        if (af) {
-            line[0] = "AF-ON  A" + aud;
-        } else if(!af) {
-            line[0] = "DIST   A" + aud;
-        }
-        if (!ftin) {
-            line[1] = dist;
-        } else if (ftin) {
-            unsigned int ft = dist * 100 / 3048;
-            unsigned int in = dist * 100 / 254 - ft * 12;
-            line[1] = ft + "-" + in;
-        }
-        update_disp();
-    } else if (!lidar_conn && volt_check > volt_refresh){
-        voltage = float(analogRead(p_batt)) * 9.9 / float(a_res); //9.9v -> v_div -> 3.3v
-        line[0] = "LOCK   A" + aud;
-        line[1] = String(voltage, 2);
-        volt_check = millis(); //reset timer
-        update_disp();
+void check_volt(){
+    if (volt_check > V_REFESH){
+        voltage = (float)analogRead(BATT) * 9.9 / (float)ADCRES; //9.9v -> v_div -> 3.3v
+        volt_check = 0;
     }
 }
-void show_menu(){
-    if (!edit){ //scroll menu browsing
-        disp_lines = 3;
-        if (curr_menu != 0){
-            line[0] = menu[curr_menu - 1];
-        } else {
-            line[0] = "";
+void lock_screen(){
+    disp_lines = 3;
+    check_volt();
+    if (lidar_conn){
+        line[0] = "LOCK  " + String(voltage, 2) + "V  A" + aud;
+        if (af) {
+            line[1] = "AUTO FOCUS";
+        } else if(!af) {
+            line[1] = "MANUAL FOCUS";
         }
-        line[1] = ">" + menu[curr_menu] + "<";
-        if (curr_menu != (menu_count - 1)){
-            line[2] = menu[curr_menu + 1];
+        if (!ftin) {
+            line[2] = String(dist) + "cm";
+        } else if (ftin) {
+            float ft = (float)dist / 2.54 / 12;
+            float in = (float)dist / 2.54 - (int)ft * 12;
+            line[2] = String(ft, 0) + "ft" + String(in, 0) + "in";
+        }
+    } else if (!lidar_conn){
+        line[0] = "LOCK         A" + aud;
+        line[1] = "BATTERY";
+        line[2] = String(voltage, 2) + "V";
+    }
+    update_disp();
+}
+void show_menu(){
+    check_volt();
+    line[0] = "MENU  " + String(voltage, 2) + "V  A" + aud;
+
+    if (!edit){ //scroll menu browsing
+        disp_lines = 4;
+        if (curr_menu != 0){
+            line[1] = menu[curr_menu - 1];
         } else {
-            line[2] = "";
+            line[1] = "";
+        }
+        line[2] = ">" + menu[curr_menu] + "<";
+        if (curr_menu != (MENU - 1)){
+            line[3] = menu[curr_menu + 1];
+        } else {
+            line[3] = "";
         }
     } else if (edit){ //edit mode
-        disp_lines = 2;
-        line[0] = menu[curr_menu];
+        disp_lines = 3;
+        line[1] = menu[curr_menu];
         if (curr_menu < 3){ //up-down
-            line[1] = "-/+";
+            line[2] = "-/+";
         } else if (curr_menu == 3){
-            line[1] = fps[curr_fps];
+            line[2] = fps[curr_fps];
         } else if (curr_menu == 4){
-            line[1] = fps[curr_codec];
+            line[2] = fps[curr_codec];
         } else if (curr_menu == 5){
-            disp_lines = 3;
-            line[1] = lens[curr_lens][0];
-            line[2] = lens[curr_lens][1];
+            disp_lines = 4;
+            line[2] = lens[curr_lens][0];
+            line[3] = lens[curr_lens][1];
         } else if (curr_menu == 6){
-            line[1] = sens + "/10";
+            line[2] = String(sens) + "/10";
+        } else if (curr_menu == 7){
+            line[2] = String(servo.readMicroseconds());
         } else if (curr_menu == 8){
-            line[1] = offset + "cm";
+            line[2] = String(offset) + "cm";
         } else if (curr_menu == 9){
-            line[1] = range + "cm";
+            line[2] = String(range) + "cm";
         }
     }
     update_disp();    
 }
-void update_disp(){
-    display.clearDisplay();
-    
-    display.setTextSize(2); //scale
-    display.setTextColor(WHITE);
-    //align center
-    display.setCursor(padding(0,2), 4); 
-    display.print(line[0]);
-    
-    switch (disp_lines){
-        case 2:
-            display.setTextSize(4);
-            display.setCursor(padding(1,4), 26);
-            display.print(line[1]);
-            break;
-        case 3:
-            display.setCursor(padding(1,2), 24);
-            display.print(line[1]);
-            display.setCursor(padding(2,2), 44);
-            display.print(line[2]);
-            break;
+void padding(int ln, bool big = false){
+    int pad;
+    char font[17];
+    line[ln].toCharArray(font, 17);
+    if (big){
+        pad = (8 - strlen(font)) / 2;
+    } else {
+        pad = (16 - strlen(font)) / 2;
     }
+    for (int i = 0; i < pad; i++){
+        line[ln] = " " + line[ln] + " ";
+    }
+}
+void update_disp(){
+    u8x8.setFont(u8x8_font_7x14_1x2_r);
+    padding(0);
+    u8x8.setCursor(0,0);
+    u8x8.setInverseFont(1);
+    u8x8.println(line[0]);
+    padding(1);
+    u8x8.setCursor(0,2);
+    u8x8.setInverseFont(0);
+    u8x8.println(line[1]);
+    if (disp_lines == 4){
+        padding(2);
+        u8x8.setCursor(0,4);
+        u8x8.println(line[2]);
+        padding(3);
+        u8x8.setCursor(0,6);
+        u8x8.println(line[3]);
+    } else {
+        char big_font[9];
+        line[2].toCharArray(big_font, 9);
+        u8x8.setFont(u8x8_font_inr21_2x4_r);
+        padding(2, true);
+        u8x8.draw2x2String(0,4,big_font);
+    }
+}
 
-    display.display();
-}
-int padding(int ln, int font_size){
-    return ((120 - sizeof(line[ln]) * 6 * font_size) / 2 + 4);
-}
 // button related
 void record(){
-    if (lockup > rec_lock){
+    if (lockup > REC_HOLD){
         step(1, 6);
         lockup = 0;
     } 
 }
 void check_button(){
     if (encoder.SwitchPressed()){ // depressed
-        if (!digitalRead(p_push)){
+        if (!digitalRead(ENCPUSH)){
             unsigned long curr = millis();
-            while (!digitalRead(p_push)){
+            while (!digitalRead(ENCPUSH)){
                 if ((millis() - curr) > 1000){ // long push
                     flip_lock();
                 }
@@ -326,7 +341,6 @@ void check_button(){
 void flip_lock(){
     if (lock){
         lock = false;
-        show_menu();
     } else {
         lock = true;
     }
@@ -339,7 +353,6 @@ void button_handler(){
         } else if (!edit){ //menu browsing
             edit = true;
         }
-        show_menu();
     } else if (lock){
         if (ftin){
             ftin = false;
@@ -353,7 +366,6 @@ void button_handler(){
 void enc_interrupt(void){
     if (encoder.HasRotaryValueChanged()){
         int movement = encoder.GetRotaryValue(1);
-
         if (lock){ 
             //when locked change audio
             aud = constrain((aud + movement), 0, 100);
@@ -363,17 +375,17 @@ void enc_interrupt(void){
             sbus.Send();
         } else if (!lock){
             if (!edit){
-                curr_menu = constrain((curr_menu + movement), 0, (menu_count - 1));//nav menu system - free move
+                curr_menu = constrain((curr_menu + movement), 0, (MENU - 1));//nav menu system - free move
             } else if (edit){
                 //change values
                 if (curr_menu < 3){
                     step(movement, curr_menu);// up down
                 } else if (curr_menu == 3){
-                    curr_fps = constrain((curr_fps + movement), 0, (fps_count - 1));
+                    curr_fps = constrain((curr_fps + movement), 0, (FPS - 1));
                 } else if (curr_menu == 4){
-                    curr_codec = constrain((curr_codec + movement), 0, (codec_count - 1));
+                    curr_codec = constrain((curr_codec + movement), 0, (CODEC - 1));
                 } else if (curr_menu == 5){
-                    curr_lens = constrain((curr_lens + movement), 0, (lens_count - 1));
+                    curr_lens = constrain((curr_lens + movement), 0, (LENS - 1));
                 } else if (curr_menu == 6){
                     sens = constrain((sens + movement), 1, 10);
                 } else if (curr_menu == 8){
@@ -383,7 +395,6 @@ void enc_interrupt(void){
                 }
             }
         }
-        show_menu();
     }
 }
 
@@ -405,20 +416,20 @@ void read_lidar(){
                         if (false_count > 0){
                             tail_count++;
                         }
-                        if (false_count == 0 || tail_count > tail_end){
+                        if (false_count == 0 || tail_count > TAIL){
                             dist = dist - (dist - raw_dist) / 2; //unit: cm smoothing by 0.5
                             raw_prev = raw_dist;
-                            dist_prev[4] = dist_prev[3];
-                            dist_prev[3] = dist_prev[2];
-                            dist_prev[2] = dist_prev[1];
-                            dist_prev[1] = dist_prev[0];
-                            dist_prev[0] = dist;
+                            dist_buffer[4] = dist_buffer[3];
+                            dist_buffer[3] = dist_buffer[2];
+                            dist_buffer[2] = dist_buffer[1];
+                            dist_buffer[1] = dist_buffer[0];
+                            dist_buffer[0] = dist;
                             false_count = 0;
                             tail_count = 0;
                         }
                     } else {
                         false_count++;
-                        dist = dist_prev[4];
+                        dist = dist_buffer[4];
                     }
                 }
             }
@@ -427,7 +438,7 @@ void read_lidar(){
 }
 void servo_drive(){
     int focus = 1500;
-    int remote = analogRead(p_remote);
+    int remote = analogRead(REMOTE);
     if (3071 < remote){
         record();
     } else if (1023 < remote && remote < 2047){
@@ -435,7 +446,7 @@ void servo_drive(){
         focus = af_curve.value(float(dist));
     } else if (remote < 1023){
         af = false;
-        focus = map(analogRead(p_focus), 0, a_res, pos[curr_lens][1], pos[curr_lens][9]);
+        focus = map(analogRead(FOCUS), 0, ADCRES, pos[curr_lens][1], pos[curr_lens][9]);
     }
     servo.writeMicroseconds(focus);
 }
@@ -443,7 +454,8 @@ void servo_drive(){
 /* execution */
 
 void setup(){
-    Serial.begin(115200); //USB. shared with S1. debug only
+    Serial.begin(115200); //USB debug
+    //Serial1.begin(115200); //not in use. reserved.
     //Serial2.begin(100000); //sbus init by library
     Serial3.begin(115200); //lidar
     sbus.begin();
@@ -451,31 +463,27 @@ void setup(){
     encoder.AddRotaryCounter(1, 10, false); //max 10
     encoder.SetRotary(1);
     
-    if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3D)) { // Address 0x3D for 128x64
-        Serial.println(F("SSD1306 allocation failed"));
-        for(;;); // Don't proceed, loop forever
-    }
-
+    u8x8.begin();
     welcome();
 
     read_rom();
 
     analogReadRes(12);
-    pinMode(p_run, INPUT_PULLUP);
-    pinMode(p_push, INPUT_PULLUP);
-    pinMode(p_enca, INPUT_PULLUP);
-    pinMode(p_encb, INPUT_PULLUP);
+    pinMode(RUN, INPUT_PULLUP);
+    pinMode(ENCPUSH, INPUT_PULLUP);
+    pinMode(ENCCLK, INPUT_PULLUP);
+    pinMode(ENCDT, INPUT_PULLUP);
     /*
-    pinMode(p_batt, INPUT);
-    pinMode(p_remote, INPUT);
-    pinMode(p_focus, INPUT);
+    pinMode(BATT, INPUT);
+    pinMode(REMOTE, INPUT);
+    pinMode(FOCUS, INPUT);
     */
-    attachInterrupt(digitalPinToInterrupt(p_run), record, FALLING); //active low
-    attachInterrupt(digitalPinToInterrupt(p_enca), enc_interrupt, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(p_encb), enc_interrupt, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(p_push), check_button, FALLING);
+    attachInterrupt(digitalPinToInterrupt(RUN), record, FALLING); //active low
+    attachInterrupt(digitalPinToInterrupt(ENCCLK), enc_interrupt, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(ENCDT), enc_interrupt, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(ENCPUSH), check_button, FALLING);
     
-    servo.attach(p_servo);
+    servo.attach(SERVO);
 
     //initial sbus data either loaded from eeprom or default
     for(int i = 0; i < 18; i++){
@@ -483,7 +491,7 @@ void setup(){
     }
     sbus.Update();
 
-    make_spline();
+    map_spline();
 }
 
 void loop(void){
@@ -496,13 +504,11 @@ void loop(void){
 
     servo_drive();
 
+    //display refreshes at max fps
     if (lock){
         lock_screen();
     } else {
-        if (curr_menu == 7 && edit == true){
-            line[1] = servo.readMicroseconds();
-            update_disp();
-        }
+        show_menu();
     }
     
 }
