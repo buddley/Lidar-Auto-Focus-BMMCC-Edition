@@ -191,7 +191,6 @@ void set_value(){
     }
     sbus.Update();
     sbus.Send();
-
     write_rom();
 }
 
@@ -211,11 +210,15 @@ void check_volt(){
     if (volt_check > V_REFESH){
         voltage = (float)analogRead(BATT) * 9.9 / (float)ADCRES; //9.9v -> v_div -> 3.3v
         volt_check = 0;
+        if (lock){
+            lock_screen();
+        } else if (!lock){
+            show_menu();
+        }
     }
 }
 void lock_screen(){
     disp_lines = 3;
-    check_volt();
     if (lidar_conn){
         line[0] = "LOCK  " + String(voltage, 2) + "V  A" + aud;
         if (af) {
@@ -228,7 +231,7 @@ void lock_screen(){
         } else if (ftin) {
             float ft = (float)dist / 2.54 / 12;
             float in = (float)dist / 2.54 - (int)ft * 12;
-            line[2] = String(ft, 0) + "ft" + String(in, 0) + "in";
+            line[2] = String((int)ft) + "ft" + String((int)in) + "in";
         }
     } else if (!lidar_conn){
         line[0] = "LOCK         A" + aud;
@@ -238,9 +241,7 @@ void lock_screen(){
     update_disp();
 }
 void show_menu(){
-    check_volt();
     line[0] = "MENU  " + String(voltage, 2) + "V  A" + aud;
-
     if (!edit){ //scroll menu browsing
         disp_lines = 4;
         if (curr_menu != 0){
@@ -341,8 +342,10 @@ void check_button(){
 void flip_lock(){
     if (lock){
         lock = false;
+        show_menu();
     } else {
         lock = true;
+        lock_screen();
     }
 }
 void button_handler(){
@@ -353,12 +356,14 @@ void button_handler(){
         } else if (!edit){ //menu browsing
             edit = true;
         }
+        show_menu();
     } else if (lock){
         if (ftin){
             ftin = false;
         } else if (!ftin){
             ftin = true;
         }
+        lock_screen();
     }
 }
 
@@ -395,6 +400,7 @@ void enc_interrupt(void){
                 }
             }
         }
+        show_menu();
     }
 }
 
@@ -431,6 +437,7 @@ void read_lidar(){
                         false_count++;
                         dist = dist_buffer[4];
                     }
+                    lock_screen();
                 }
             }
         }
@@ -460,9 +467,6 @@ void setup(){
     Serial3.begin(115200); //lidar
     sbus.begin();
     
-    encoder.AddRotaryCounter(1, 10, false); //max 10
-    encoder.SetRotary(1);
-    
     u8x8.begin();
     welcome();
 
@@ -482,7 +486,10 @@ void setup(){
     attachInterrupt(digitalPinToInterrupt(ENCCLK), enc_interrupt, CHANGE);
     attachInterrupt(digitalPinToInterrupt(ENCDT), enc_interrupt, CHANGE);
     attachInterrupt(digitalPinToInterrupt(ENCPUSH), check_button, FALLING);
-    
+
+    encoder.AddRotaryCounter(1, 10, false); //max 10
+    encoder.SetRotary(1);
+
     servo.attach(SERVO);
 
     //initial sbus data either loaded from eeprom or default
@@ -503,12 +510,4 @@ void loop(void){
     }
 
     servo_drive();
-
-    //display refreshes at max fps
-    if (lock){
-        lock_screen();
-    } else {
-        show_menu();
-    }
-    
 }
