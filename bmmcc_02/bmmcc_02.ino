@@ -197,6 +197,7 @@ void set_value(){
 // display related
 void welcome(){
     u8x8.clear();
+    u8x8.setFont(u8x8_font_7x14_1x2_r);
     u8x8.setCursor(0,0);
     u8x8.println(" BMMCC CONTROL");
     u8x8.setCursor(0,2);
@@ -205,6 +206,7 @@ void welcome(){
     u8x8.println("   d-project");
     u8x8.setCursor(0,6);
     u8x8.println("     190215");
+    delay(2000);
 }
 void check_volt(){
     if (volt_check > V_REFESH){
@@ -220,7 +222,7 @@ void check_volt(){
 void lock_screen(){
     disp_lines = 3;
     if (lidar_conn){
-        line[0] = "LOCK  " + String(voltage, 2) + "V  A" + aud;
+        line[0] = "LOCK  " + String(voltage, 2) + "V  A" + String(aud);
         if (af) {
             line[1] = "AUTO FOCUS";
         } else if(!af) {
@@ -234,7 +236,7 @@ void lock_screen(){
             line[2] = String((int)ft) + "ft" + String((int)in) + "in";
         }
     } else if (!lidar_conn){
-        line[0] = "LOCK         A" + aud;
+        line[0] = "LOCK         A" + String(aud);
         line[1] = "BATTERY";
         line[2] = String(voltage, 2) + "V";
     }
@@ -294,6 +296,10 @@ void padding(int ln, bool big = false){
     }
 }
 void update_disp(){
+    Serial.println(line[0]);
+    Serial.println(line[1]);
+    Serial.println(line[2]);
+    Serial.println(line[3]);
     u8x8.setFont(u8x8_font_7x14_1x2_r);
     padding(0);
     u8x8.setCursor(0,0);
@@ -312,10 +318,10 @@ void update_disp(){
         u8x8.println(line[3]);
     } else {
         char big_font[9];
-        line[2].toCharArray(big_font, 9);
         u8x8.setFont(u8x8_font_inr21_2x4_r);
         padding(2, true);
-        u8x8.draw2x2String(0,4,big_font);
+        line[2].toCharArray(big_font, 9);
+        u8x8.drawString(0,4,big_font);
     }
 }
 
@@ -323,11 +329,13 @@ void update_disp(){
 void record(){
     if (lockup > REC_HOLD){
         step(1, 6);
+        Serial.println("Record Pressed");
         lockup = 0;
     } 
 }
 void check_button(){
     if (encoder.SwitchPressed()){ // depressed
+        Serial.println("Encoder pressed");
         if (!digitalRead(ENCPUSH)){
             unsigned long curr = millis();
             while (!digitalRead(ENCPUSH)){
@@ -368,16 +376,20 @@ void button_handler(){
 }
 
 // encoder related
-void enc_interrupt(void){
-    if (encoder.HasRotaryValueChanged()){
+void enc_interrupt(){
+    if (encoder.HasRotaryValueChanged(1)){
         int movement = encoder.GetRotaryValue(1);
+        Serial.print("Encoder move: ");
+        Serial.println(movement);
         if (lock){ 
             //when locked change audio
             aud = constrain((aud + movement), 0, 100);
+            Serial.println(aud);
             sbus_value[5] = map(aud, 0, 100, 0, 2047);
             sbus.Servo(6, sbus_value[5]);
             sbus.Update();
             sbus.Send();
+            lock_screen();
         } else if (!lock){
             if (!edit){
                 curr_menu = constrain((curr_menu + movement), 0, (MENU - 1));//nav menu system - free move
@@ -399,8 +411,9 @@ void enc_interrupt(void){
                     range = constrain((range + movement), 0, 1200);
                 }
             }
+            Serial.println(curr_menu);
+            show_menu();
         }
-        show_menu();
     }
 }
 
@@ -468,28 +481,31 @@ void setup(){
     sbus.begin();
     
     u8x8.begin();
+    //Serial.println("Display Initialized");
+    delay(1000);
     welcome();
-
+    
     read_rom();
 
     analogReadRes(12);
     pinMode(RUN, INPUT_PULLUP);
-    pinMode(ENCPUSH, INPUT_PULLUP);
-    pinMode(ENCCLK, INPUT_PULLUP);
-    pinMode(ENCDT, INPUT_PULLUP);
+    //pinMode(ENCPUSH, INPUT_PULLUP);
+    //pinMode(ENCCLK, INPUT_PULLUP);
+    //pinMode(ENCDT, INPUT_PULLUP);
     /*
     pinMode(BATT, INPUT);
     pinMode(REMOTE, INPUT);
     pinMode(FOCUS, INPUT);
     */
     attachInterrupt(digitalPinToInterrupt(RUN), record, FALLING); //active low
-    attachInterrupt(digitalPinToInterrupt(ENCCLK), enc_interrupt, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(ENCDT), enc_interrupt, CHANGE);
+    //attachInterrupt(digitalPinToInterrupt(ENCCLK), enc_interrupt, CHANGE);
+    //attachInterrupt(digitalPinToInterrupt(ENCDT), enc_interrupt, CHANGE);
     attachInterrupt(digitalPinToInterrupt(ENCPUSH), check_button, FALLING);
 
-    encoder.AddRotaryCounter(1, 10, false); //max 10
-    encoder.SetRotary(1);
-
+    if (encoder.AddRotaryCounter(1, 10, false)){
+        encoder.SetRotary(1);
+    }
+    
     servo.attach(SERVO);
 
     //initial sbus data either loaded from eeprom or default
@@ -499,6 +515,8 @@ void setup(){
     sbus.Update();
 
     map_spline();
+
+    lock_screen();
 }
 
 void loop(void){
@@ -510,4 +528,6 @@ void loop(void){
     }
 
     servo_drive();
+    
+    enc_interrupt();
 }
