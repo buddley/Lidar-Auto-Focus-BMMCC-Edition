@@ -5,13 +5,15 @@
 * 2019-01-01 by buddley
 * built for Teensy LC board
 */
+#define ENCODER_OPTIMIZE_INTERRUPTS
 
 #include <BMC_SBUS.h>
 #include <EEPROM.h>
 #include <Wire.h>
 //#include <PWMServo.h> //use PWMServo when reg servo is unreliable
 #include <Servo.h>
-#include <ky-040.h>
+#include <Encoder.h>
+#include <Bounce.h>
 #include <Arduino.h>
 #include <U8x8lib.h>
 #include <SPI.h>
@@ -47,8 +49,10 @@ int disp_lines = 4;
 
 U8X8_SSD1306_128X64_NONAME_4W_HW_SPI u8x8(CS, DC, RST);
 
-/* encoder */
-ky040 encoder(ENCCLK, ENCDT, ENCPUSH);
+/* encoder & buttons */
+Encoder encoder(ENCCLK, ENCDT);
+Bounce encbtn(ENCPUSH, 10);
+Bounce recbtn(RUN, 50);
 
 /* lidar */
 bool lidar_conn = false;
@@ -88,7 +92,6 @@ int pos[LENS][14] = {
 
 
 Spline af_curve;
-//PWMServo servo;
 Servo servo;
 
 /* cam control */
@@ -113,7 +116,7 @@ int curr_lens = 0;
 String menu[] = {"ASA", "Shutter Angle", "White Balance", "Framerate", "Codec", "Lenses", "Sensitivity", "Focus Motor", "LIDAR Offset", "LIDAR Range"};
 #define FPS 8
 String fps[] = {"23.98p", "24.00p", "25.00p", "29.97p", "30.00p", "50.00p", "59.94p", "60.00p"};
-#define CODEC 8
+#define CODEC 6
 String codec[] = {"RAW", "RAW 3:1", "P422 HQ", "P422", "P422 LT", "P PROXY"};
 
 /* FUNCTIONS */
@@ -222,7 +225,7 @@ void check_volt(){
 void lock_screen(){
     disp_lines = 3;
     if (lidar_conn){
-        line[0] = "LOCK  " + String(voltage, 2) + "V  A" + String(aud);
+        line[0] = "LOCK  " + String(voltage, 2) + "V A" + String(aud);
         if (af) {
             line[1] = "AUTO FOCUS";
         } else if(!af) {
@@ -236,14 +239,14 @@ void lock_screen(){
             line[2] = String((int)ft) + "ft" + String((int)in) + "in";
         }
     } else if (!lidar_conn){
-        line[0] = "LOCK         A" + String(aud);
+        line[0] = "LOCK        A" + String(aud);
         line[1] = "BATTERY";
         line[2] = String(voltage, 2) + "V";
     }
     update_disp();
 }
 void show_menu(){
-    line[0] = "MENU  " + String(voltage, 2) + "V  A" + aud;
+    line[0] = "MENU  " + String(voltage, 2) + "V A" + aud;
     if (!edit){ //scroll menu browsing
         disp_lines = 4;
         if (curr_menu != 0){
@@ -265,7 +268,7 @@ void show_menu(){
         } else if (curr_menu == 3){
             line[2] = fps[curr_fps];
         } else if (curr_menu == 4){
-            line[2] = fps[curr_codec];
+            line[2] = codec[curr_codec];
         } else if (curr_menu == 5){
             disp_lines = 4;
             line[2] = lens[curr_lens][0];
@@ -292,36 +295,37 @@ void padding(int ln, bool big = false){
         pad = (16 - strlen(font)) / 2;
     }
     for (int i = 0; i < pad; i++){
-        line[ln] = " " + line[ln] + " ";
+        line[ln] = " " + line[ln] + "  ";
     }
 }
 void update_disp(){
-    Serial.println(line[0]);
-    Serial.println(line[1]);
-    Serial.println(line[2]);
-    Serial.println(line[3]);
     u8x8.setFont(u8x8_font_7x14_1x2_r);
     padding(0);
     u8x8.setCursor(0,0);
     u8x8.setInverseFont(1);
     u8x8.println(line[0]);
+    Serial.println(line[0]);
     padding(1);
     u8x8.setCursor(0,2);
     u8x8.setInverseFont(0);
     u8x8.println(line[1]);
+    Serial.println(line[1]);
     if (disp_lines == 4){
         padding(2);
         u8x8.setCursor(0,4);
         u8x8.println(line[2]);
+        Serial.println(line[2]);
         padding(3);
         u8x8.setCursor(0,6);
         u8x8.println(line[3]);
+        Serial.println(line[3]);
     } else {
         char big_font[9];
         u8x8.setFont(u8x8_font_inr21_2x4_r);
         padding(2, true);
         line[2].toCharArray(big_font, 9);
         u8x8.drawString(0,4,big_font);
+        Serial.println(line[2]);
     }
 }
 
@@ -334,18 +338,29 @@ void record(){
     } 
 }
 void check_button(){
-    if (encoder.SwitchPressed()){ // depressed
-        Serial.println("Encoder pressed");
-        if (!digitalRead(ENCPUSH)){
-            unsigned long curr = millis();
-            while (!digitalRead(ENCPUSH)){
-                if ((millis() - curr) > 1000){ // long push
-                    flip_lock();
+    bool long_press = false;
+    if (encbtn.update()){
+        if (encbtn.fallingEdge()){
+            Serial.println("Encoder pressed");
+            if (!digitalRead(ENCPUSH)){
+                unsigned long curr = millis();
+                while (!digitalRead(ENCPUSH)){
+                    if ((millis() - curr) > 1000){ // long push
+                        long_press = true;
+                        flip_lock();
+                    }
                 }
             }
+            if (!long_press){
+                button_handler(); //short push
+            }
         }
-        button_handler(); //short push
     }
+    if (recbtn.update()){
+            if (recbtn.fallingEdge()){
+                record();
+            }
+        }
 }
 void flip_lock(){
     if (lock){
@@ -355,6 +370,8 @@ void flip_lock(){
         lock = true;
         lock_screen();
     }
+    edit = false;
+    delay(1500);
 }
 void button_handler(){
     if (!lock){
@@ -377,24 +394,23 @@ void button_handler(){
 
 // encoder related
 void enc_interrupt(){
-    if (encoder.HasRotaryValueChanged(1)){
-        int movement = encoder.GetRotaryValue(1);
+    int movement = encoder.read() / 4; // one notch = 4 pulse;
+    if (movement != 0){
         Serial.print("Encoder move: ");
         Serial.println(movement);
-        if (lock){ 
-            //when locked change audio
+        if (lock){ //when locked change audio
             aud = constrain((aud + movement), 0, 100);
             Serial.println(aud);
             sbus_value[5] = map(aud, 0, 100, 0, 2047);
             sbus.Servo(6, sbus_value[5]);
             sbus.Update();
             sbus.Send();
+            write_rom();
             lock_screen();
         } else if (!lock){
             if (!edit){
                 curr_menu = constrain((curr_menu + movement), 0, (MENU - 1));//nav menu system - free move
-            } else if (edit){
-                //change values
+            } else if (edit){ //change values
                 if (curr_menu < 3){
                     step(movement, curr_menu);// up down
                 } else if (curr_menu == 3){
@@ -414,6 +430,7 @@ void enc_interrupt(){
             Serial.println(curr_menu);
             show_menu();
         }
+    encoder.write(0);
     }
 }
 
@@ -469,6 +486,10 @@ void servo_drive(){
         focus = map(analogRead(FOCUS), 0, ADCRES, pos[curr_lens][1], pos[curr_lens][9]);
     }
     servo.writeMicroseconds(focus);
+    if (!lock && curr_menu == 7 && edit){
+        line[2] = String(servo.readMicroseconds());
+        update_disp();
+    }
 }
 
 /* execution */
@@ -481,7 +502,6 @@ void setup(){
     sbus.begin();
     
     u8x8.begin();
-    //Serial.println("Display Initialized");
     delay(1000);
     welcome();
     
@@ -489,23 +509,21 @@ void setup(){
 
     analogReadRes(12);
     pinMode(RUN, INPUT_PULLUP);
-    //pinMode(ENCPUSH, INPUT_PULLUP);
-    //pinMode(ENCCLK, INPUT_PULLUP);
-    //pinMode(ENCDT, INPUT_PULLUP);
+    pinMode(ENCPUSH, INPUT_PULLUP);
     /*
+    pinMode(ENCCLK, INPUT_PULLUP);
+    pinMode(ENCDT, INPUT_PULLUP);
+    
     pinMode(BATT, INPUT);
     pinMode(REMOTE, INPUT);
     pinMode(FOCUS, INPUT);
-    */
-    attachInterrupt(digitalPinToInterrupt(RUN), record, FALLING); //active low
-    //attachInterrupt(digitalPinToInterrupt(ENCCLK), enc_interrupt, CHANGE);
-    //attachInterrupt(digitalPinToInterrupt(ENCDT), enc_interrupt, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(ENCPUSH), check_button, FALLING);
-
-    if (encoder.AddRotaryCounter(1, 10, false)){
-        encoder.SetRotary(1);
-    }
     
+    attachInterrupt(digitalPinToInterrupt(RUN), record, FALLING); //active low
+    attachInterrupt(digitalPinToInterrupt(ENCCLK), enc_interrupt, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(ENCDT), enc_interrupt, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(ENCPUSH), check_button, FALLING);
+    */
+
     servo.attach(SERVO);
 
     //initial sbus data either loaded from eeprom or default
@@ -530,4 +548,7 @@ void loop(void){
     servo_drive();
     
     enc_interrupt();
+    check_button();
+
+    check_volt();
 }
