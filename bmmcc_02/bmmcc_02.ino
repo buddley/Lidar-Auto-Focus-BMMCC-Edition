@@ -93,6 +93,7 @@ int pos[LENS][14] = {
 
 Spline af_curve;
 Servo servo;
+int focus = 1500;
 
 /* cam control */
 float voltage = 0;
@@ -467,21 +468,22 @@ void read_lidar(){
                         false_count++;
                         dist = dist_buffer[4];
                     }
-                    lock_screen();
+                    if (lock){
+                        lock_screen();
+                    }
                 }
             }
         }
     }
 }
 void servo_drive(){
-    int focus = 1500;
     int remote = analogRead(REMOTE);
-    if (3071 < remote){
+    if (3071 < remote){ //record run
         record();
-    } else if (1023 < remote && remote < 2047){
+    } else if (1023 < remote && remote < 2047){ // auto focus
         af = true;
         focus = af_curve.value(float(dist));
-    } else if (remote < 1023){
+    } else if (remote < 1023){ //manual focus
         af = false;
         focus = map(analogRead(FOCUS), 0, ADCRES, pos[curr_lens][1], pos[curr_lens][9]);
     }
