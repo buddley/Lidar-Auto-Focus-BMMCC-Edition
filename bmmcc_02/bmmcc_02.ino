@@ -37,7 +37,7 @@ MOSI 11  SCK 13 */
 #define ADCRES 4095
 
 /* Sbus def */
-#define SBUS_MID 1023
+#define SBUS_MID 1024
 #define SBUS_LOW 352
 #define SBUS_HIGH 1696
 
@@ -166,17 +166,17 @@ void step(int dir, int channel){
     sbus.Servo(channel,SBUS_MID);
     sbus.Update();
     sbus.Send();
-    delay(5);
+    delay(100);
     if (dir > 0){
-        sbus.Servo(channel,SBUS_HIGH);
+        sbus.Servo(channel,SBUS_HIGH - 200);
         sbus.Update();
         sbus.Send();
     } else if (dir < 0){
-        sbus.Servo(channel,SBUS_LOW);
+        sbus.Servo(channel,SBUS_LOW + 200);
         sbus.Update();
         sbus.Send();
     }
-    delay(5);
+    delay(100);
     sbus.Servo(channel,SBUS_MID);
     sbus.Update();
     sbus.Send();
@@ -184,10 +184,10 @@ void step(int dir, int channel){
 void set_value(){
     switch (curr_menu){
         case 3:
-            sbus.Servo((curr_menu + 1), int(SBUS_LOW + (SBUS_HIGH - SBUS_LOW) / FPS * curr_fps));
+            sbus.Servo((curr_menu + 1), int(SBUS_LOW + (SBUS_HIGH - SBUS_LOW) / FPS * curr_fps + 112));
             break;
         case 4:
-            sbus.Servo((curr_menu + 1), int(SBUS_LOW + (SBUS_HIGH - SBUS_LOW) / CODEC * curr_codec));
+            sbus.Servo((curr_menu + 1), int(SBUS_LOW + (SBUS_HIGH - SBUS_LOW) / CODEC * curr_codec + 84));
             break;
         case 5:
             map_spline();
@@ -402,7 +402,7 @@ void enc_interrupt(){
         if (lock){ //when locked change audio
             aud = constrain((aud + movement), 0, 100);
             Serial.println(aud);
-            sbus_value[5] = map(aud, 0, 100, 0, 2047);
+            sbus_value[5] = map(aud, 0, 100, SBUS_LOW, SBUS_HIGH);
             sbus.Servo(6, sbus_value[5]);
             sbus.Update();
             sbus.Send();
