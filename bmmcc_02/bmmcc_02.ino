@@ -305,28 +305,28 @@ void update_disp(){
     u8x8.setCursor(0,0);
     u8x8.setInverseFont(1);
     u8x8.println(line[0]);
-    Serial.println(line[0]);
+    //Serial.println(line[0]);
     padding(1);
     u8x8.setCursor(0,2);
     u8x8.setInverseFont(0);
     u8x8.println(line[1]);
-    Serial.println(line[1]);
+    //Serial.println(line[1]);
     if (disp_lines == 4){
         padding(2);
         u8x8.setCursor(0,4);
         u8x8.println(line[2]);
-        Serial.println(line[2]);
+        //Serial.println(line[2]);
         padding(3);
         u8x8.setCursor(0,6);
         u8x8.println(line[3]);
-        Serial.println(line[3]);
+        //Serial.println(line[3]);
     } else {
         char big_font[9];
         u8x8.setFont(u8x8_font_inr21_2x4_r);
         padding(2, true);
         line[2].toCharArray(big_font, 9);
         u8x8.drawString(0,4,big_font);
-        Serial.println(line[2]);
+        //Serial.println(line[2]);
     }
 }
 
@@ -477,8 +477,8 @@ void read_lidar(){
     }
 }
 void servo_drive(){
-    int remote = analogRead(REMOTE);
-    if (3071 < remote){ //record run
+    //int remote = analogRead(REMOTE);
+    /*if (3071 < remote){ //record run
         record();
     } else if (1023 < remote && remote < 2047){ // auto focus
         af = true;
@@ -486,7 +486,21 @@ void servo_drive(){
     } else if (remote < 1023){ //manual focus
         af = false;
         focus = map(analogRead(FOCUS), 0, ADCRES, pos[curr_lens][1], pos[curr_lens][9]);
+        Serial.print(analogRead(FOCUS));
+        Serial.print("->");
+        Serial.println(focus);
+    }*/
+    if (!digitalRead(REMOTE)){ // auto focus
+        af = true;
+        focus = af_curve.value(float(dist));
+    } else { //manual focus
+        af = false;
+        focus = map(analogRead(FOCUS), 0, ADCRES, pos[curr_lens][1], pos[curr_lens][SCALE - 2]);
+        Serial.print(analogRead(FOCUS));
+        Serial.print("->");
     }
+    Serial.println(focus);
+
     servo.writeMicroseconds(focus);
     if (!lock && curr_menu == 7 && edit){
         line[2] = String(servo.readMicroseconds());
@@ -512,12 +526,13 @@ void setup(){
     analogReadRes(12);
     pinMode(RUN, INPUT_PULLUP);
     pinMode(ENCPUSH, INPUT_PULLUP);
+    pinMode(REMOTE, INPUT_PULLUP);
+
     /*
     pinMode(ENCCLK, INPUT_PULLUP);
     pinMode(ENCDT, INPUT_PULLUP);
     
     pinMode(BATT, INPUT);
-    pinMode(REMOTE, INPUT);
     pinMode(FOCUS, INPUT);
     
     attachInterrupt(digitalPinToInterrupt(RUN), record, FALLING); //active low
