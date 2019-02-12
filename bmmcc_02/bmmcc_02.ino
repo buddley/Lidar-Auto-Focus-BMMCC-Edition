@@ -53,6 +53,7 @@ U8X8_SSD1306_128X64_NONAME_4W_HW_SPI u8x8(CS, DC, RST);
 Encoder encoder(ENCCLK, ENCDT);
 Bounce encbtn(ENCPUSH, 10);
 Bounce recbtn(RUN, 50);
+Bounce remotebtn(REMOTE, 10);
 
 /* lidar */
 bool lidar_conn = false;
@@ -68,6 +69,7 @@ int false_count = 0;
 int tail_count = 0;
 #define TAIL 3
 
+bool prev_af = false;
 bool af = false;
 bool ftin = true;
 
@@ -87,13 +89,15 @@ int scale[LENS][14] = {
     }; //the second last one = inf, one of values = 1200cm = longest distance lidar can measure
 int pos[LENS][14] = {
     {999,1000,1075,1275,1395,1445,1505,1555,1605,1655,1705,1755,1830,1831},
-    {999,1000,1075,1275,1395,1445,1505,1555,1605,1655,1705,1755,1830,1831}
+    {500,501,1075,1275,1395,1445,1505,1555,1605,1655,1705,1755,2499,2500}
     };
 
 
 Spline af_curve;
 Servo servo;
 int focus = 1500;
+int prev_wheel;
+#define UNHOLD 40
 
 /* cam control */
 float voltage = 0;
@@ -149,17 +153,24 @@ void write_rom(){
 }
 
 //spline
-void map_spline(){
-    float x[SCALE], y[SCALE];
+int map_spline(){
+    float x[SCALE];
+    float y[SCALE];
     for (int i = 0; i < SCALE; i++){
-        x[i] = scale[curr_lens][i];
-        y[i] = pos[curr_lens][i];
+        x[i] = (float)scale[curr_lens][i];
+        y[i] = (float)pos[curr_lens][i];
     }
     af_curve.setPoints(x, y, SCALE);
     af_curve.setDegree( Catmull );
+    return int(af_curve.value(float(dist)));
+/*  for( int i = scale[curr_lens][0]; i < scale[curr_lens][SCALE - 1]; i+= 10 ) {
+    float temp = af_curve.value(float(i));
+    Serial.print(i);
+    Serial.print("-->");
+    Serial.println(int(temp));
+  }*/
 }
             
-
 // control related
 void step(int dir, int channel){
     channel++; //0-base to 1-base
@@ -190,7 +201,7 @@ void set_value(){
             sbus.Servo((curr_menu + 1), int(SBUS_LOW + (SBUS_HIGH - SBUS_LOW) / CODEC * curr_codec + 84));
             break;
         case 5:
-            map_spline();
+            //map_spline();
             break;
     }
     sbus.Update();
@@ -477,30 +488,28 @@ void read_lidar(){
     }
 }
 void servo_drive(){
-    //int remote = analogRead(REMOTE);
-    /*if (3071 < remote){ //record run
-        record();
-    } else if (1023 < remote && remote < 2047){ // auto focus
-        af = true;
-        focus = af_curve.value(float(dist));
-    } else if (remote < 1023){ //manual focus
-        af = false;
-        focus = map(analogRead(FOCUS), 0, ADCRES, pos[curr_lens][1], pos[curr_lens][9]);
-        Serial.print(analogRead(FOCUS));
-        Serial.print("->");
-        Serial.println(focus);
-    }*/
+    int wheel = analogRead(FOCUS);
+    if (remotebtn.update() && remotebtn.risingEdge()){
+        prev_wheel = wheel;
+    }
     if (!digitalRead(REMOTE)){ // auto focus
         af = true;
-        focus = af_curve.value(float(dist));
+        prev_af = true;
+        focus = map_spline();
     } else { //manual focus
         af = false;
-        focus = map(analogRead(FOCUS), 0, ADCRES, pos[curr_lens][1], pos[curr_lens][SCALE - 2]);
-        Serial.print(analogRead(FOCUS));
+        if (prev_af && abs(prev_wheel - wheel) > UNHOLD){
+            focus = map(wheel, 0, ADCRES, pos[curr_lens][1], pos[curr_lens][SCALE - 2]);
+            prev_af = false;
+            prev_wheel = wheel;
+        } else if (!prev_af){
+            focus = map(wheel, 0, ADCRES, pos[curr_lens][1], pos[curr_lens][SCALE - 2]);
+            prev_wheel = wheel;
+        }
+        Serial.print(wheel);
         Serial.print("->");
     }
     Serial.println(focus);
-
     servo.writeMicroseconds(focus);
     if (!lock && curr_menu == 7 && edit){
         line[2] = String(servo.readMicroseconds());
