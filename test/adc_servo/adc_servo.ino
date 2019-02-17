@@ -18,7 +18,7 @@ void loop() {
   pot = analogRead(A0);
   Serial.print(pot);
 
-  ms = map(pot, 0, 1023, 1000, 2000);
+  ms = map(pot, 0, 1023, 500, 2500);
   Serial.print("->");
   Serial.print(ms);
   
