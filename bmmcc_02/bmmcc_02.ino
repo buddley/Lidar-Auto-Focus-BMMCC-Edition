@@ -74,24 +74,27 @@ bool af = false;
 bool ftin = true;
 
 /* lens - hardcoded */
-#define LENS 2
-#define SCALE 14
+#define LENS 3
+#define SCALE 12
 String lens[LENS][2] = {
-    {"24-85mm", "f/3.5"},
-    {"50mm", "f/1.4"}
+    {"24-85mm f/3.5", "min-7m(23ft)"},
+    {"50mm f/1.4", "min-1m(3.3ft)"},
+    {"50mm f/1.4", "0.65m(2.2ft)-inf"}
     };
 /* lens scale and servo position
 * actual measurement needs 12 positions
 * first and last values are not used - only for spline calculation*/
+int measurement[LENS] = {12,10,14};
 int scale[LENS][14] = {
-    {44,45,50,60,70,80,100,120,150,200,300,500,5357,5358},
-    {44,45,50,60,70,80,100,120,150,200,300,500,5357,5358}
+    {34,35,70,100,150,200,300,400,500,600,700,701},//10+2
+    {44,45,50,55,60,70,80,90,100,102},//8+2
+    {64,65,70,80,90,100,120,150,200,300,500,1000,5357,5358}//12+2
     }; //the second last one = inf, one of values = 1200cm = longest distance lidar can measure
 int pos[LENS][14] = {
-    {999,1000,1075,1275,1395,1445,1505,1555,1605,1655,1705,1755,1830,1831},
-    {500,501,1075,1275,1395,1445,1505,1555,1605,1655,1705,1755,2499,2500}
+    {2500,2400,1475,1210,980,870,740,680,635,610,550,544},
+    {2500,2400,1990,1730,1470,1130,900,740,565,544},
+    {2500,2400,2200,2000,1800,1665,1440,1250,1060,900,755,645,544,500}
     };
-
 
 Spline af_curve;
 Servo servo;
@@ -154,13 +157,14 @@ void write_rom(){
 
 //spline
 int map_spline(){
-    float x[SCALE];
-    float y[SCALE];
-    for (int i = 0; i < SCALE; i++){
+    int count = measurement[curr_lens];
+    float x[count];
+    float y[count];
+    for (int i = 0; i < count; i++){
         x[i] = (float)scale[curr_lens][i];
         y[i] = (float)pos[curr_lens][i];
     }
-    af_curve.setPoints(x, y, SCALE);
+    af_curve.setPoints(x, y, count);
     af_curve.setDegree( Catmull );
     return int(af_curve.value(float(dist)));
 /*  for( int i = scale[curr_lens][0]; i < scale[curr_lens][SCALE - 1]; i+= 10 ) {
@@ -499,11 +503,11 @@ void servo_drive(){
     } else { //manual focus
         af = false;
         if (prev_af && abs(prev_wheel - wheel) > UNHOLD){
-            focus = map(wheel, 0, ADCRES, pos[curr_lens][1], pos[curr_lens][SCALE - 2]);
+            focus = map(wheel, 0, ADCRES, pos[curr_lens][1], pos[curr_lens][measurement[curr_lens] - 2]);
             prev_af = false;
             prev_wheel = wheel;
         } else if (!prev_af){
-            focus = map(wheel, 0, ADCRES, pos[curr_lens][1], pos[curr_lens][SCALE - 2]);
+            focus = map(wheel, 0, ADCRES, pos[curr_lens][1], pos[curr_lens][measurement[curr_lens] - 2]);
             prev_wheel = wheel;
         }
         Serial.print(wheel);
